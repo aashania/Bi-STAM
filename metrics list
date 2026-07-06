@@ -1,0 +1,9 @@
+from tensorflow.keras import metrics
+
+metrics_list = [
+    metrics.CategoricalAccuracy(name='categorical_accuracy'),
+    metrics.TruePositives(name='true_positives'),
+    metrics.FalsePositives(name='false_positives'),
+    metrics.TrueNegatives(name='true_negatives'),
+    metrics.FalseNegatives(name='false_negatives'),
+]
