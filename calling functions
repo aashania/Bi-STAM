@@ -65,7 +65,7 @@ class AdaptiveWeightsLayer(Layer):
         output1 =self.gamma*input1
         output2 = w2*input2
         return output1 + output2
-  class TimeEmbedding(keras.layers.Layer):
+   class TimeEmbedding(keras.layers.Layer):
     def __init__(self, dim, **kwargs):
         super().__init__(**kwargs)
         self.dim = dim
