@@ -1,0 +1,80 @@
+def get_forw_back_diff(images ): #batch,299,299,3
+  images_shifted_min1=tf.roll(images,-1,axis=0)
+  images_shifted_pls1=tf.roll(images,1,axis=0)
+  back_diffe=images-images_shifted_min1
+  forw_diffe=images-images_shifted_pls1
+
+  return [images,back_diffe,forw_diffe]
+
+class Frame_Diff(Layer):
+    def __init__(self, **kwargs):
+        super(Frame_Diff, self).__init__(**kwargs)
+    def call(self, inputs):
+        # Roll the inputs by 1 along the last dimension
+        rs=tf.py_function(get_forw_back_diff,inputs)
+        return rs[0],rs[1],rs[2]
+
+    def get_config(self):
+        # Return the configuration for serialization
+        return super(Frame_Diff, self).get_config()
+
+class ForwardDiff(tf.keras.layers.Layer):
+  def __init__(self, **kwargs):
+    super(ForwardDiff, self).__init__(**kwargs)
+
+  def build(self, input_shape):
+    super(ForwardDiff, self).build(input_shape)
+
+  def call(self, inputs):
+    images = inputs
+
+    images_shifted_pls1 = tf.roll(images, 1, axis=0)  # Forward shift
+
+    forw_diff = images - images_shifted_pls1
+    return  tf.identity(forw_diff, name='forward_diff')
+
+class BackDiff(tf.keras.layers.Layer):
+  def __init__(self, **kwargs):
+    super(BackDiff, self).__init__(**kwargs)
+
+  def build(self, input_shape):
+    super(BackDiff, self).build(input_shape)
+
+  def call(self, inputs):
+    images = inputs
+    images_shifted_min1 = tf.roll(images, -1, axis=0)  # Backward shift
+   # Forward shift
+    back_diff = images - images_shifted_min1
+
+    return tf.identity(back_diff, name='backward_diff')
+
+class AdaptiveWeightsLayer(Layer):
+    def __init__(self):
+        super(AdaptiveWeightsLayer, self).__init__()
+
+
+    def build(self, input_shape):
+        # Create a single set of weights
+        self.gamma = self.add_weight(shape=[1],
+                                  initializer='random_normal',
+                                  trainable=True)
+
+    def call(self, input1,input2):
+        # Compute complementary weights
+        w2 = 1 - self.gamma  # one minus gamma
+        output1 =self.gamma*input1
+        output2 = w2*input2
+        return output1 + output2
+  class TimeEmbedding(keras.layers.Layer):
+    def __init__(self, dim, **kwargs):
+        super().__init__(**kwargs)
+        self.dim = dim
+        self.half_dim = dim // 2
+        self.emb = math.log(10000) / (self.half_dim - 1)
+        self.emb = tf.exp(tf.range(self.half_dim, dtype=tf.float32) * -self.emb)
+
+    def call(self, inputs):
+        inputs = tf.cast(inputs, dtype=tf.float32)
+        emb = inputs[:, None] * self.emb[None, :]
+        emb = tf.concat([tf.sin(emb), tf.cos(emb)], axis=-1)
+        return emb
