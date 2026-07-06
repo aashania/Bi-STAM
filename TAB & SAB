@@ -1,0 +1,76 @@
+def TemporalBLock(img,img_diff_diff,gamma  = 0.5,adaptive_sum = 0.5,tau= 16, model_nam='temp_block'):
+
+    D_avgpool = AveragePooling2D(pool_size=(img_diff_diff.shape[1], img_diff_diff.shape[2]))(img_diff_diff)
+    # reduction
+    convred   = Conv2D(filters=D_avgpool.shape[-1] // tau, kernel_size=(1, 1), activation='relu', padding='same')
+    D_reduced = convred(D_avgpool)
+    #increase
+    b_b_1     = Conv2D(D_avgpool.shape[-1],kernel_size=(1, 1),activation='relu',padding="same")(D_reduced)
+    gamma     = Activation('sigmoid')(b_b_1)
+
+    static_weight  = Multiply()([1 - gamma, img])  # (1 - γ) * Conv3(X)
+    dynamic_weight = Multiply()([gamma, img_diff_diff])  # γ * D
+    X_prime        = Add()([static_weight, dynamic_weight])
+
+    model          = keras.models.Model([img,img_diff_diff],X_prime,name= model_nam)
+    return model((img,img_diff_diff))
+
+def spatial_block(ta_outpt,model_nam, beta=2, delta_s=0.5, delta_c=0.5 ):
+
+     # Temporal differences calculation
+     def temporal_diff(X):
+         forward_diff      = tf.concat([X[:, 1:] - X[:, :-1], tf.zeros_like(X[:, :1])], axis=1)
+         backward_diff     = tf.concat([tf.zeros_like(X[:, :1]), X[:, :-1] - X[:, 1:]], axis=1)
+         return forward_diff, backward_diff
+
+     # convolution to downsample channel
+     encoded_features      = Conv2D(filters=ta_outpt.shape[-1]//beta, kernel_size=(1, 1), activation='relu', padding='same')(ta_outpt) #(None, 28, 28, 256)
+
+
+     def temporal_diff_func(x):
+         f_diff, b_diff    = temporal_diff(x)
+         return tf.stack([f_diff, b_diff], axis=0)
+
+     temporal_diff_output  = Lambda(lambda x: temporal_diff_func(x))(encoded_features)  #(2, None, 28, 28, 256)
+
+     forward_diff          = Lambda(lambda x: x[0])(temporal_diff_output)
+     backward_diff         = Lambda(lambda x: x[1])(temporal_diff_output)
+
+     # 3×3 Convolution for Convsmo
+     Convsmo               = Conv2D(filters=1, kernel_size=(3, 3),activation='relu', padding='same')
+     Df                    = Convsmo(forward_diff)       #(None, 28, 28, 1)
+     Db                    = Convsmo(backward_diff)      #(None, 28, 28, 1)
+
+     # Recover to N segments by adding zero maps
+     def recover_segments(D):
+         return tf.concat([tf.zeros_like(D[:, :1]), D[:, 1:], tf.zeros_like(D[:, :1])], axis=1)
+
+     Df = Lambda(lambda x: recover_segments(x))(Df)                #(None, 29, 28, 1)
+     Db = Lambda(lambda x: recover_segments(x))(Db)                #(None, 29, 28, 1)
+     D                     = Add()([Df, Db])                       #(None, 29, 28, 1)
+
+     # Spatial-wise attention map
+     Convred               = Conv2D(filters=1, kernel_size=(2, 1), activation='relu', padding='valid')
+     As                    = Activation('sigmoid')(Convred(D)) - delta_s           #(None, 29, 28, 1)
+     As                    = ta_outpt * As
+
+     # Channel-wise attention map
+     Avgpool               = AveragePooling2D(pool_size=(ta_outpt.shape[1], ta_outpt.shape[2]))  # Adjust pooling size if needed
+     Convinc               = Conv2D(filters=ta_outpt.shape[-1], kernel_size=(1, 1),activation='relu', padding='same')
+     Ac                    = Activation('sigmoid')(Convinc(Avgpool(D))) - delta_c        # (None, 1, 1, 512)
+     Ac                    = ta_outpt * Ac       # (None, 28, 28, 512)
+
+     # concatenation
+     spatial_out           = Add()([ta_outpt, Ac, As])
+     model                 = keras.models.Model(ta_outpt,spatial_out,name=model_nam)
+     return model(ta_outpt)
+
+def diff_funct(y):
+    forward_s       = ForwardDiff()(y)
+    backward_s      = BackDiff()(y)
+    conv1_s         = Conv2D(filters=y.shape[-1], kernel_size=(7, 7), activation='relu',padding='same')
+    conv2_s         = Conv2D(filters=y.shape[-1], kernel_size=(7, 7), activation='relu', padding='same')  # Conv2
+    Df_conv_s       = conv1_s(forward_s)
+    Db_conv_s       = conv2_s(backward_s)
+    diff_diff_s     = AdaptiveWeightsLayer()(Df_conv_s,Db_conv_s)
+    return diff_diff_s
