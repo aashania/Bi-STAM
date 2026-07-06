@@ -1,0 +1,97 @@
+class NormalizeSumWeights(keras.constraints.Constraint):
+    def __init__(self,**kwargs):
+        super(NormalizeSumWeights,self).__init__(**kwargs)
+
+    def call(self,w):
+        return tf.math.divide(w,tf.math.reduce_sum(w))
+class WeightedSum(keras.layers.Layer):
+    def __init__( self, n_inputs = 2, **kwargs):
+        super( WeightedSum, self ).__init__( **kwargs)
+        self.n_inputs = n_inputs
+
+    def build(self,input_shape):
+        self.sum_weights = self.add_weight(name="sum_weights",shape=(1,self.n_inputs),
+                                    initializer = keras.initializers.RandomUniform(0,1.0),
+                                    constraint = NormalizeSumWeights(),
+                                    trainable = True)
+
+    def call(self,inputs):
+        output = tf.multiply(tf.cast(self.sum_weights[0,0],inputs[0].dtype),inputs[0])
+        for i in range(1,len(inputs)):
+            output += tf.multiply(inputs[i],tf.cast(self.sum_weights[0,i],inputs[0].dtype))
+
+        return output
+class WeightedConcatenate(keras.layers.Layer):
+    def __init__( self, n_inputs = 2, **kwargs):
+        super( WeightedConcatenate, self ).__init__( **kwargs)
+        self.n_inputs = n_inputs
+
+    def build(self,input_shape):
+        self.sum_weights = self.add_weight(name="sum_weights",shape=(1,self.n_inputs),
+                                    initializer = keras.initializers.RandomUniform(0,1.0),
+                                    constraint = NormalizeSumWeights(),
+                                    trainable = True)
+
+    def call(self,inputs):
+        output =tf.keras.layers.concatenate([tf.multiply(inputs[0],tf.cast(self.sum_weights[0,0],inputs[0].dtype)),tf.multiply(inputs[1],tf.cast(self.sum_weights[0,1],inputs[0].dtype))])
+        return output
+
+from tensorflow import keras
+from tensorflow.keras.regularizers import l2
+input         = keras.layers.Input(shape=(224,224,3))
+conv3         = Conv2D(filters=input.shape[-1], kernel_size=(7, 7),activation='relu',  padding='same')  # Conv3
+X_conv        = conv3(input)                                                                            # first input to the model
+
+diff_diff     = diff_funct(input)
+
+stage1        = tf.keras.models.Model(inputs= [base_model.input], outputs=base_model.get_layer('pool1_pool').output,name='stage1')
+stage2        = tf.keras.models.Model(inputs= base_model.get_layer('conv2_block1_1_conv').input , outputs=base_model.get_layer('conv2_block3_out').output,name='stage2')
+stage3        = tf.keras.models.Model(inputs= base_model.get_layer('conv3_block1_1_conv').input , outputs=base_model.get_layer('conv3_block4_out').output,name='stage3')
+stage4        = tf.keras.models.Model(inputs= base_model.get_layer('conv4_block1_1_conv').input , outputs=base_model.get_layer('conv4_block6_out').output,name='stage4')
+stage5        = tf.keras.models.Model(inputs= base_model.get_layer('conv5_block1_1_conv').input , outputs=base_model.get_layer('conv5_block3_out').output,name='stage5')
+
+# introduction of temporal block
+x1            =  stage1(X_conv)
+y1            =  stage1(diff_diff)                                                                  # (56,56,64)
+t_out1        =  TemporalBLock(x1,y1, model_nam='temp_blk1')
+x2            =  stage2(x1)
+y2            =  stage2(t_out1)                                                                    # (56,56,256)
+t_out2        =  TemporalBLock(x2,y2, model_nam='temp_blk2')
+print(t_out2)
+
+# introduction of 1st spatial block
+#diff_diff_1   = diff_funct(t_out2)
+x3            = stage3(t_out2)                                                                # (28, 28, 512)
+s_out1        = spatial_block(x3, model_nam='spatial_blk1')
+#s_out1        = UpSampling2D(size=(2, 2))(s_out1)                                                  # (56, 56, 512)
+s_out1        = keras.layers.Reshape((56, 56, 128))(s_out1)
+
+# takeing spatial block out parallely
+
+#x4            = diff_funct(x1)
+x4            = spatial_block(x1, model_nam='spatial_blk2')
+#x5            = diff_funct(x2)
+x5            = spatial_block(x2, model_nam='spatial_blk3')
+
+# concatenate all output
+concatenated1  = WeightedConcatenate()([x4,x5])
+concatenated2  = WeightedConcatenate()([concatenated1,s_out1])              #(None, 56, 56, 448)
+print(concatenated2)
+
+s_out        = Conv2D(filters=112, kernel_size=(3,3),  strides=(2,2), activation='relu', padding='valid')(concatenated2)
+print(s_out)
+s_out        = Conv2D(filters=3, kernel_size=(3,3),  strides=(1,1), activation='relu', padding='valid')(s_out)
+print(s_out)
+s_out        = Dropout(0.3)(s_out)
+s_out        = BatchNormalization()(s_out)
+
+s_out        = Flatten()(s_out)  # Output feature size: (None, 676)
+print(s_out)
+#classifier layers
+s_dense           = keras.layers.Dense(256, activation='relu',kernel_regularizer=l2(0.001), name='dense_1')(s_out)
+#s_dense          = keras.layers.Dense(256, activation='relu',name='dense_2')(s_out1)
+#s_dense          = keras.layers.Dense(128, activation='relu',name='dense_3')(s_dense)
+#s_dense          = keras.layers.Dense(32, activation='relu',name='dense_4')(s_dense)
+s_dense          = Dropout(0.5)(s_dense)
+s_dense          = keras.layers.Dense(2, activation='sigmoid',name='dense_5')(s_dense)
+new_model        = keras.models.Model(inputs=input, outputs=s_dense)
