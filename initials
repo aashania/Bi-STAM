@@ -1,0 +1,83 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import tensorflow as tf
+from tensorflow import keras
+from keras.models import Sequential
+import os
+import numpy as np
+from keras.applications.inception_v3 import InceptionV3
+from keras.applications.inception_v3 import preprocess_input
+from keras.preprocessing import image as image_utils
+from tensorflow.keras.utils import plot_model
+from IPython.display import display, Image
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input
+import keras.models as models
+import keras.backend as K
+from keras.layers import Dense, Dropout, Flatten
+
+from keras.layers import Conv2D, MaxPooling2D
+from keras.layers import Concatenate
+
+from __future__ import division
+from keras.models import Model
+
+from keras.optimizers import Adam
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from keras import backend as K
+import pandas as pd
+from keras.optimizers import SGD
+from keras.optimizers import *
+from keras.layers import *
+import numpy as np
+from keras.utils import plot_model
+import tensorflow as tf
+from tensorflow.keras.layers import Conv2D, Activation, Input, AveragePooling2D, Multiply, Add, Lambda
+from tensorflow.keras.preprocessing import image
+def model_photu(model,n=True,expand=False,direct='TB',shapes=True,name='model_plot',dp=200):
+   return plot_model(model, to_file=name+'.png', show_shapes=shapes, show_layer_names=n,expand_nested=expand,rankdir=direct,dpi=dp)
+
+# preprocessing of dataset
+def get_formatted_dataset(data):
+  # get viedoe name and group data  -2 means video name
+  fname=data['filename'].iloc[1].split("/")
+  num= len(fname)
+
+  data['client_vidname']    = data['filename'].str.split("/", expand=True)[num-2]+'_'+data['filename'].str.split("/", expand=True)[num-1]
+  q                         = data.groupby(["client_vidname"])["filename"].count().rename('c1')
+  df=pd.DataFrame()
+  for vidname in q.keys():
+    num_frame=q[vidname]
+
+    frames_to_get=32
+    if(num_frame<24):
+      frames_to_get=16
+    elif num_frame<32:
+      frames_to_get=24
+    this_df=data[data.client_vidname == vidname].head(frames_to_get)
+    df=pd.concat([df,this_df],ignore_index=True)
+  df['filename'] = df['filename'].str.replace('drive/MyDrive/ML_Data/Datasets_Preprocessed/','')
+  df['filename'] = df['filename'].str.replace('_Files_frames','')
+  df['filename'] = df['filename'].str.replace('Train_Files','Train')
+
+  return df
+
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+folder_frames_casia= '--- casia path'
+folder_frames_OULU= '--oulu path'
+folder_frames_replay= '--replay path'
+
+def image_data_augmentation(df,folder_frames, batch_size=8, target_size=(224, 224)):    # i change batch size 8 to 16
+         # Load frames in batches for augmentation25
+         train_gen = ImageDataGenerator( rescale=1./255, horizontal_flip=True            )
+         return train_gen.flow_from_dataframe(
+             dataframe = df,
+             directory = folder_frames ,
+             x_col = "filename", y_col = "label" ,
+             target_size=target_size,
+             batch_size=batch_size,
+             class_mode='categorical',  # Assuming categorical labels (adjust if needed)
+             shuffle=False,  # Shuffle frames within each batch
+             seed=42,  # Set random seed for reproducibility (optional)
+            )
